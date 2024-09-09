@@ -1,0 +1,10 @@
+pyyaml
+ipython-autotime
+# # jupyter development
+# jupyter
+# matplotlib
+# seaborn
+# plotly
+
+# # utils
+# pip-search==0.0.12

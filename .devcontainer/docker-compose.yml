@@ -1,0 +1,22 @@
+version: "3.8"
+services:
+  devcontainer:
+    network_mode: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [ gpu ]
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        - USER_NAME=ubuntu
+        - USER_UID=1000
+        - USER_GID=1000
+    volumes:
+      - ..:/workspace:cached
+      - $HOME/.ssh/:/home/ubuntu/.ssh
+      - $HOME/.gitconfig:/home/ubuntu/.gitconfig
+    command: /bin/sh -c "while sleep 1000; do :; done"
+    privileged: true

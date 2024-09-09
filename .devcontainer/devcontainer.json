@@ -1,0 +1,63 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the README at:
+// https://github.com/microsoft/vscode-dev-containers/tree/v0.183.0/containers/python-3
+{
+	"name": "insanely-fast-whisper",
+	// "initializeCommand": "make core-build",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "devcontainer",
+	"runServices": [
+		"devcontainer"
+	],
+	"workspaceFolder": "/workspace",
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {}
+	},
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"extensions.verifySignature": false,
+				"files.trimFinalNewlines": true,
+				"files.trimTrailingWhitespace": true,
+				"files.watcherExclude": {
+					"**/.git/objects/**": true,
+					"**/.git/subtree-cache/**": true
+				},
+				"[python]": {
+					"editor.defaultFormatter": "charliermarsh.ruff",
+					"editor.codeActionsOnSave": {
+						"source.fixAll": "never"
+					}
+				},
+				"editor.formatOnSave": true,
+				"notebook.formatOnSave.enabled": true,
+				"notebook.output.scrolling": true,
+				"notebook.codeActionsOnSave": {
+					"notebook.source.organizeImports": "explicit"
+				},
+				"isort.args": [
+					"--profile=black",
+					"--skip-gitignore",
+					"--length-sort-straight"
+				]
+			},
+			// Add the IDs of extensions you want installed when the container is created.
+			"extensions": [
+				"charliermarsh.ruff",
+				"ms-python.isort",
+				"eamodio.gitlens",
+				"ms-toolsai.jupyter",
+				"tamasfe.even-better-toml",
+				"Gruntfuggly.todo-tree",
+				"ChristianDein.python-radon",
+				"christian-kohler.path-intellisense",
+				"mechatroner.rainbow-csv",
+				"github.vscode-github-actions"
+			]
+		}
+	},
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// "postCreateCommand": "bash /home/vscode/entrypoint.sh",
+	"overrideCommand": false
+}
