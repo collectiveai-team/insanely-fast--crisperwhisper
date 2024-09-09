@@ -1,11 +1,11 @@
 import json
 import argparse
-from transformers import pipeline
-from rich.progress import Progress, TimeElapsedColumn, BarColumn, TextColumn
-import torch
 
-from .utils.diarization_pipeline import diarize
-from .utils.result import build_result
+import torch
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from transformers import pipeline
+
+from .utils.result import adjust_pauses_for_hf_pipeline_output, build_result
 
 parser = argparse.ArgumentParser(description="Automatic Speech Recognition")
 parser.add_argument(
@@ -31,9 +31,9 @@ parser.add_argument(
 parser.add_argument(
     "--model-name",
     required=False,
-    default="openai/whisper-large-v3",
+    default="nyrahealth/CrisperWhisper",
     type=str,
-    help="Name of the pretrained model/ checkpoint to perform ASR. (default: openai/whisper-large-v3)",
+    help="Name of the pretrained model/ checkpoint to perform ASR. (default: nyrahealth/CrisperWhisper)",
 )
 parser.add_argument(
     "--task",
@@ -72,20 +72,6 @@ parser.add_argument(
     choices=["chunk", "word"],
     help="Whisper supports both chunked as well as word level timestamps. (default: chunk)",
 )
-parser.add_argument(
-    "--hf_token",
-    required=False,
-    default="no_token",
-    type=str,
-    help="Provide a hf.co/settings/token for Pyannote.audio to diarise the audio clips",
-)
-parser.add_argument(
-    "--diarization_model",
-    required=False,
-    default="pyannote/speaker-diarization-3.1",
-    type=str,
-    help="Name of the pretrained model/ checkpoint to perform diarization. (default: pyannote/speaker-diarization)",
-)
 
 
 def main():
@@ -96,13 +82,15 @@ def main():
         model=args.model_name,
         torch_dtype=torch.float16,
         device="mps" if args.device_id == "mps" else f"cuda:{args.device_id}",
-        model_kwargs={"attn_implementation": "flash_attention_2"} if args.flash else {"attn_implementation": "sdpa"},
+        model_kwargs={"attn_implementation": "flash_attention_2"}
+        if args.flash
+        else {"attn_implementation": "sdpa"},
     )
 
     if args.device_id == "mps":
         torch.mps.empty_cache()
     # elif not args.flash:
-        # pipe.model = pipe.model.to_bettertransformer()
+    # pipe.model = pipe.model.to_bettertransformer()
 
     ts = "word" if args.timestamp == "word" else True
 
@@ -128,20 +116,12 @@ def main():
             return_timestamps=ts,
         )
 
-    if args.hf_token != "no_token":
-        speakers_transcript = diarize(args, outputs)
-        with open(args.transcript_path, "w", encoding="utf8") as fp:
-            result = build_result(speakers_transcript, outputs)
-            json.dump(result, fp, ensure_ascii=False)
+        outputs = adjust_pauses_for_hf_pipeline_output(outputs)
 
-        print(
-            f"Voila!✨ Your file has been transcribed & speaker segmented go check it out over here 👉 {args.transcript_path}"
-        )
-    else:
-        with open(args.transcript_path, "w", encoding="utf8") as fp:
-            result = build_result([], outputs)
-            json.dump(result, fp, ensure_ascii=False)
+    with open(args.transcript_path, "w", encoding="utf8") as fp:
+        result = build_result([], outputs)
+        json.dump(result, fp, ensure_ascii=False)
 
-        print(
-            f"Voila!✨ Your file has been transcribed go check it out over here 👉 {args.transcript_path}"
-        )
+    print(
+        f"Voila!✨ Your file has been transcribed go check it out over here 👉 {args.transcript_path}"
+    )

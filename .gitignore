@@ -163,3 +163,7 @@ cython_debug/
 
 .vscode/
 .idea/
+
+.cog
+model_cache
+*.flac

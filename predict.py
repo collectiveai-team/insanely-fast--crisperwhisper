@@ -1,30 +1,28 @@
 import os
-from typing import Any
 import time
 import subprocess
-import torch
+from typing import Any
+
 import numpy as np
+import torch
+import requests
+from cog import BasePredictor, Input, Path
+from torchaudio import functional as F
 from transformers import (
     WhisperFeatureExtractor,
-    WhisperTokenizerFast,
     WhisperForConditionalGeneration,
+    WhisperTokenizerFast,
     pipeline,
 )
-from pyannote.audio import Pipeline
-from transformers.pipelines.audio_utils import ffmpeg_read
 from transformers.models.whisper.tokenization_whisper import LANGUAGES
-from cog import BasePredictor, Input, Path
+from transformers.pipelines.audio_utils import ffmpeg_read
 
-
-PIPELINE_URL = (
-    "https://weights.replicate.delivery/default/incredibly-fast-whisper-pipe.tar"
-)
-PIPELINE_CACHE = "whisper-cache"
+MODEL = "nyrahealth/CrisperWhisper"
 
 
 def prepare_weights():
     """Shows how to get the weights from HuggingFace Hub and then upload to Replicate google cloud bucket for faster boot time."""
-    model_id = "openai/whisper-large-v3"
+    model_id = MODEL
     torch_dtype = torch.float16
     model_cache = "model_cache"
     model = WhisperForConditionalGeneration.from_pretrained(
@@ -38,7 +36,7 @@ def prepare_weights():
         model_id, cache_dir=model_cache
     )
 
-    pipe = pipeline(
+    pipeline(
         "automatic-speech-recognition",
         model=model,
         tokenizer=tokenizer,
@@ -46,9 +44,6 @@ def prepare_weights():
         model_kwargs={"use_flash_attention_2": True},
         torch_dtype=torch_dtype,
     )
-    pipe.save_pretrained(
-        PIPELINE_CACHE, safe_serialization=True
-    )  # Then copy this dir to google cloud bucket that can later be downloaded from PIPELINE_URL
 
 
 def download_weights(url, dest):
@@ -59,23 +54,49 @@ def download_weights(url, dest):
     print("downloading took: ", time.time() - start)
 
 
+def adjust_pauses_for_hf_pipeline_output(pipeline_output, split_threshold=0.12):
+    """
+    Adjust pause timings by distributing pauses up to the threshold evenly between adjacent words.
+    """
+
+    adjusted_chunks = pipeline_output["chunks"].copy()
+
+    for i in range(len(adjusted_chunks) - 1):
+        current_chunk = adjusted_chunks[i]
+        next_chunk = adjusted_chunks[i + 1]
+
+        current_start, current_end = current_chunk["timestamp"]
+        next_start, next_end = next_chunk["timestamp"]
+        pause_duration = next_start - current_end
+
+        if pause_duration > 0:
+            if pause_duration > split_threshold:
+                distribute = split_threshold / 2
+            else:
+                distribute = pause_duration / 2
+
+            # Adjust current chunk end time
+            adjusted_chunks[i]["timestamp"] = (current_start, current_end + distribute)
+
+            # Adjust next chunk start time
+            adjusted_chunks[i + 1]["timestamp"] = (next_start - distribute, next_end)
+    pipeline_output["chunks"] = adjusted_chunks
+
+    return pipeline_output
+
+
 class Predictor(BasePredictor):
     def setup(self):
         """Loads whisper models into memory to make running multiple predictions efficient"""
-        model_id = "openai/whisper-large-v3"
-        torch_dtype = torch.float16
+        # model_id = "openai/whisper-large-v3"
+        # torch_dtype = torch.float16
         self.device = "cuda:0"
-
-        if not os.path.exists(PIPELINE_CACHE):
-            download_weights(PIPELINE_URL, PIPELINE_CACHE)
 
         self.pipe = pipeline(
             task="automatic-speech-recognition",
-            model=PIPELINE_CACHE,
+            model=MODEL,
             device=self.device,
         )
-
-        self.diarization_pipeline = None
 
     def predict(
         self,
@@ -99,21 +120,8 @@ class Predictor(BasePredictor):
             choices=["chunk", "word"],
             description="Whisper supports both chunked as well as word level timestamps.",
         ),
-        diarise_audio: bool = Input(
-            default=False,
-            description="Use Pyannote.audio to diarise the audio clips. You will need to provide hf_token below too.",
-        ),
-        hf_token: str = Input(
-            default=None,
-            description="Provide a hf.co/settings/token for Pyannote.audio to diarise the audio clips. You need to agree to the terms in 'https://huggingface.co/pyannote/speaker-diarization-3.1' and 'https://huggingface.co/pyannote/segmentation-3.0' first.",
-        ),
     ) -> Any:
         """Transcribes and optionally translates a single audio file"""
-
-        if diarise_audio:
-            assert (
-                hf_token is not None
-            ), "Please provide hf_token to diarise the audio clips"
 
         outputs = self.pipe(
             str(audio),
@@ -126,30 +134,7 @@ class Predictor(BasePredictor):
             return_timestamps="word" if timestamp == "word" else True,
         )
 
-        if diarise_audio:
-            if self.diarization_pipeline is None:
-                try:
-                    self.diarization_pipeline = Pipeline.from_pretrained(
-                        "pyannote/speaker-diarization-3.1",
-                        use_auth_token=hf_token,
-                        cache_dir=PIPELINE_CACHE,
-                    )
-                    self.diarization_pipeline.to(torch.device(self.device))
-                    print("diarization_pipeline loaded!")
-                except Exception as e:
-                    print(
-                        f"https://huggingface.co/pyannote/speaker-diarization-3.1 cannot be loaded, please check the hf_token provided.: {e}"
-                    )
-            if self.diarization_pipeline is not None:
-                print("Segmenting the audio clips.")
-                inputs, diarizer_inputs = preprocess_inputs(inputs=str(audio))
-                segments = diarize_audio(diarizer_inputs, self.diarization_pipeline)
-                segmented_transcript = post_process_segments_and_transcripts(
-                    segments, outputs["chunks"], group_by_speaker=False
-                )
-                segmented_transcript.append(outputs)
-                print("Voila!✨ Your file has been transcribed & speaker segmented!")
-                return segmented_transcript
+        outputs = adjust_pauses_for_hf_pipeline_output(outputs)
 
         print("Voila!✨ Your file has been transcribed!")
         return outputs
@@ -203,57 +188,6 @@ def preprocess_inputs(inputs):
     return inputs, diarizer_inputs
 
 
-def diarize_audio(diarizer_inputs, diarization_pipeline):
-    diarization = diarization_pipeline(
-        {"waveform": diarizer_inputs, "sample_rate": 16000},
-    )
-
-    segments = []
-    for segment, track, label in diarization.itertracks(yield_label=True):
-        segments.append(
-            {
-                "segment": {"start": segment.start, "end": segment.end},
-                "track": track,
-                "label": label,
-            }
-        )
-
-    # diarizer output may contain consecutive segments from the same speaker (e.g. {(0 -> 1, speaker_1), (1 -> 1.5, speaker_1), ...})
-    # we combine these segments to give overall timestamps for each speaker's turn (e.g. {(0 -> 1.5, speaker_1), ...})
-    new_segments = []
-    prev_segment = cur_segment = segments[0]
-
-    for i in range(1, len(segments)):
-        cur_segment = segments[i]
-
-        # check if we have changed speaker ("label")
-        if cur_segment["label"] != prev_segment["label"] and i < len(segments):
-            # add the start/end times for the super-segment to the new list
-            new_segments.append(
-                {
-                    "segment": {
-                        "start": prev_segment["segment"]["start"],
-                        "end": cur_segment["segment"]["start"],
-                    },
-                    "speaker": prev_segment["label"],
-                }
-            )
-            prev_segment = segments[i]
-
-    # add the last segment(s) if there was no speaker change
-    new_segments.append(
-        {
-            "segment": {
-                "start": prev_segment["segment"]["start"],
-                "end": cur_segment["segment"]["end"],
-            },
-            "speaker": prev_segment["label"],
-        }
-    )
-
-    return new_segments
-
-
 def post_process_segments_and_transcripts(new_segments, transcript, group_by_speaker):
     # get the end timestamps for each chunk from the ASR output
     end_timestamps = np.array([chunk["timestamp"][-1] for chunk in transcript])
@@ -288,3 +222,7 @@ def post_process_segments_and_transcripts(new_segments, transcript, group_by_spe
         end_timestamps = end_timestamps[upto_idx + 1 :]
 
     return segmented_preds
+
+
+if __name__ == "__main__":
+    prepare_weights()
