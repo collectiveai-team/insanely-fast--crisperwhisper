@@ -41,7 +41,9 @@ def get_pipeline(token: str):
         chunk_length_s=30,
         model_kwargs={"use_flash_attention_2": True},
         torch_dtype=torch_dtype,
+        return_timestamps="word",
         return_language=True,
+        device=device,
     )
     print("Done loading.")
 
@@ -127,7 +129,7 @@ class Predictor(BasePredictor):
             description="Language spoken in the audio, specify 'None' to perform language detection.",
         ),
         batch_size: int = Input(
-            default=8,
+            default=4,
             description="Number of parallel batches you want to compute. Reduce if you face OOMs.",
         ),
     ) -> Any:
@@ -146,6 +148,7 @@ class Predictor(BasePredictor):
             return_timestamps="word",
         )
 
+        print("Adjusting pauses...")
         outputs = adjust_pauses_for_hf_pipeline_output(outputs)
 
         print("Voila!✨ Your file has been transcribed!")

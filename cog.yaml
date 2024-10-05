@@ -12,7 +12,8 @@ build:
     - "torchaudio==2.3.1"
     - "tqdm==4.66.5"
     - "more-itertools==10.5.0"
-    - "transformers==4.43.4"
+    # - "transformers==4.43.4"
+    - git+https://github.com/nyrahealth/transformers.git@crisper_whisper
     - "ffmpeg-python==0.2.0"
     - "openai-whisper==20231117"
     - "optimum==1.21.4"
